@@ -1147,7 +1147,7 @@ namespace ImageToMap
             {
                 // ===== FIX 1: Auto-adjust TWC4 Configuration size to match image =====
                 // NOTE: Large maps (512+) can cause very slow execution. Start with 128 for testing.
-                const int MAX_MAP_SIZE = 128; // Reduced from 512 for faster execution
+                const int MAX_MAP_SIZE = 32; // Reduced from 128 for faster execution
                 
                 if (sourceImage != null)
                 {
