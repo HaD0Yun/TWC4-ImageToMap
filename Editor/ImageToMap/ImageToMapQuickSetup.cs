@@ -18,6 +18,14 @@ namespace ImageToMap
         {
             Debug.Log("[ImageToMap] Starting Quick Setup...");
 
+            // Step 0: Ensure ImageToMap folder exists FIRST
+            if (!AssetDatabase.IsValidFolder("Assets/ImageToMap"))
+            {
+                AssetDatabase.CreateFolder("Assets", "ImageToMap");
+                AssetDatabase.Refresh();
+                Debug.Log("[ImageToMap] Created Assets/ImageToMap folder");
+            }
+
             // Step 1: Find or create TileWorldCreatorManager
             TileWorldCreatorManager manager = Object.FindObjectOfType<TileWorldCreatorManager>();
             
@@ -41,12 +49,6 @@ namespace ImageToMap
             if (manager.configuration == null)
             {
                 Debug.Log("[ImageToMap] Creating Configuration asset...");
-                
-                // Create folder if it doesn't exist
-                if (!AssetDatabase.IsValidFolder("Assets/ImageToMap"))
-                {
-                    AssetDatabase.CreateFolder("Assets", "ImageToMap");
-                }
 
                 // Create Configuration asset
                 string configPath = "Assets/ImageToMap/ImageToMapConfiguration.asset";
