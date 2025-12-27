@@ -41,6 +41,7 @@ namespace ImageToMap
 
         // Source image
         private Texture2D sourceImage;
+        private Texture2D preprocessedImage;  // Cached preprocessed image for generation
 
         // Configuration
         private ImageToMapConfig config;
@@ -71,6 +72,11 @@ namespace ImageToMap
         private int quickHeightLevels = 8; // Increased from 4 for better terrain detail
         private float quickEdgeThreshold = 0.3f;
         private bool quickUseEdgeDetection = false;
+        
+        // Preprocessing settings for better height fidelity
+        private bool usePreprocessing = true;  // Enable by default for better results
+        private int blurRadius = 2;  // Gaussian blur radius (0 = no blur)
+        private bool normalizeContrast = true;  // Normalize to full 0-1 range
 
         // Generation Mode
         private enum GenerationMode
@@ -144,6 +150,13 @@ namespace ImageToMap
                 {
                     DestroyImmediate(analysisResult.edgeMap);
                 }
+            }
+            
+            // Clean up preprocessed image
+            if (preprocessedImage != null && preprocessedImage != sourceImage)
+            {
+                DestroyImmediate(preprocessedImage);
+                preprocessedImage = null;
             }
         }
 
@@ -540,6 +553,44 @@ namespace ImageToMap
                 }
 
                 EditorGUI.EndDisabledGroup();
+
+                EditorGUILayout.Space(10);
+                
+                // Preprocessing settings (for better height fidelity)
+                EditorGUILayout.LabelField("Image Preprocessing", EditorStyles.boldLabel);
+                EditorGUILayout.HelpBox(
+                    "Preprocessing helps the generated map better match the source image by reducing noise and maximizing height differentiation.",
+                    MessageType.Info
+                );
+                
+                bool newUsePreprocessing = EditorGUILayout.Toggle("Enable Preprocessing", usePreprocessing);
+                
+                if (usePreprocessing)
+                {
+                    EditorGUI.indentLevel++;
+                    int newBlurRadius = EditorGUILayout.IntSlider("Blur Radius", blurRadius, 0, 5);
+                    bool newNormalizeContrast = EditorGUILayout.Toggle("Normalize Contrast", normalizeContrast);
+                    EditorGUI.indentLevel--;
+                    
+                    if (newBlurRadius != blurRadius || newNormalizeContrast != normalizeContrast)
+                    {
+                        blurRadius = newBlurRadius;
+                        normalizeContrast = newNormalizeContrast;
+                        if (sourceImage != null && !isAnalyzing)
+                        {
+                            AnalyzeImage();
+                        }
+                    }
+                }
+                
+                if (newUsePreprocessing != usePreprocessing)
+                {
+                    usePreprocessing = newUsePreprocessing;
+                    if (sourceImage != null && !isAnalyzing)
+                    {
+                        AnalyzeImage();
+                    }
+                }
 
                 EditorGUILayout.Space(5);
 
@@ -1015,20 +1066,51 @@ namespace ImageToMap
 
             try
             {
+                // Clean up previous preprocessed image
+                if (preprocessedImage != null && preprocessedImage != sourceImage)
+                {
+                    DestroyImmediate(preprocessedImage);
+                    preprocessedImage = null;
+                }
+                
                 // Get analysis parameters
                 int colorClusters = config != null ? config.colorClusterCount : quickColorClusters;
                 int heightLevels = config != null ? config.heightLevelCount : quickHeightLevels;
                 float edgeThreshold = config != null ? config.edgeThreshold : quickEdgeThreshold;
 
+                // Apply preprocessing if enabled (reduces noise, improves height fidelity)
+                Texture2D imageToAnalyze = sourceImage;
+                if (usePreprocessing)
+                {
+                    EditorUtility.DisplayProgressBar("Analyzing Image", "Preprocessing image...", 0.1f);
+                    preprocessedImage = analyzer.PreprocessForHeightMap(sourceImage, blurRadius, normalizeContrast);
+                    if (preprocessedImage != null)
+                    {
+                        imageToAnalyze = preprocessedImage;
+                        Debug.Log($"[ImageToMapEditorWindow] Applied preprocessing (blur={blurRadius}, normalizeContrast={normalizeContrast})");
+                    }
+                }
+                else
+                {
+                    preprocessedImage = null;  // No preprocessing
+                }
+
                 // Perform analysis
+                // IMPORTANT: useAdaptiveHeights=false ensures height levels correspond to actual grayscale values
+                // This is critical for proper height representation - adaptive levels break the correlation
+                // between grayscale brightness and tile elevation
                 EditorUtility.DisplayProgressBar("Analyzing Image", "Running K-Means clustering...", 0.3f);
                 
                 analysisResult = analyzer.AnalyzeImage(
-                    sourceImage,
+                    imageToAnalyze,
                     colorClusters,
                     heightLevels,
-                    edgeThreshold
+                    edgeThreshold,
+                    useAdaptiveHeights: false  // Use fixed height ranges for proper height correlation
                 );
+                
+                // Store the texture to use for generation (preprocessed if available)
+                analysisResult.sourceTexture = imageToAnalyze;
 
                 EditorUtility.DisplayProgressBar("Analyzing Image", "Analysis complete!", 1f);
                 
@@ -1119,6 +1201,10 @@ namespace ImageToMap
                 }
 
                 ImageToMapGenerator.GenerationResult result;
+                
+                // Use the texture that was analyzed (preprocessed if enabled)
+                // This ensures HeightTexture uses the same data as the analysis
+                Texture2D textureForGeneration = analysisResult.sourceTexture ?? sourceImage;
 
                 if (generationMode == GenerationMode.HeightBased)
                 {
@@ -1129,7 +1215,7 @@ namespace ImageToMap
                     result = generator.GenerateFromHeightLevels(
                         targetManager,
                         analysisResult.heightLevels,
-                        sourceImage,
+                        textureForGeneration,  // Use preprocessed texture for consistent results
                         colorPalette
                     );
                 }
@@ -1142,7 +1228,7 @@ namespace ImageToMap
                     result = generator.GenerateFromColorClusters(
                         targetManager,
                         analysisResult.colorClusters,
-                        sourceImage,
+                        textureForGeneration,  // Use preprocessed texture for consistent results
                         colorPalette
                     );
                 }

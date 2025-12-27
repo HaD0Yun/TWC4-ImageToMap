@@ -190,16 +190,16 @@ namespace ImageToMap
             }
 
             // Assign pixels to clusters and calculate coverage
-            // FIX: Flip Y-axis to match Unity's bottom-left origin coordinate system
+            // NOTE: Do NOT flip Y-axis here - HeightTexture reads texture directly with raw coordinates
+            // Flipping here causes mismatch with HeightTexture's pixel access pattern
             for (int i = 0; i < totalPixels; i++)
             {
                 int x = i % width;
                 int y = i / width;
-                int flippedY = height - 1 - y;  // Flip Y for Unity coordinate system
                 int clusterIdx = assignments[i];
                 
                 ColorCluster cluster = clusters[clusterIdx];
-                cluster.pixels.Add(new Vector2Int(x, flippedY));
+                cluster.pixels.Add(new Vector2Int(x, y));  // Use raw y, no flip
                 clusters[clusterIdx] = cluster;
             }
 
@@ -412,13 +412,12 @@ namespace ImageToMap
             }
 
             // Assign pixels to height levels based on grayscale value
-            // FIX: Flip Y-axis to match Unity's bottom-left origin coordinate system
+            // NOTE: Do NOT flip Y-axis - HeightTexture reads texture directly with raw coordinates
             for (int x = 0; x < width; x++)
             {
                 for (int y = 0; y < height; y++)
                 {
                     int idx = y * width + x;
-                    int flippedY = height - 1 - y;  // Flip Y for Unity coordinate system
                     // Calculate grayscale from Color32 (faster than Color.grayscale)
                     Color32 c = pixels32[idx];
                     float grayscale = (c.r * 0.299f + c.g * 0.587f + c.b * 0.114f) / 255f;
@@ -429,7 +428,7 @@ namespace ImageToMap
                         HeightLevel level = levels[i];
                         if (grayscale >= level.minHeight && grayscale < level.maxHeight)
                         {
-                            level.positions.Add(new Vector2(x, flippedY));
+                            level.positions.Add(new Vector2(x, y));  // Use raw y, no flip
                             levels[i] = level;
                             break;
                         }
@@ -812,12 +811,12 @@ namespace ImageToMap
                 levels.Add(level);
             }
             
-            // Assign pixels to height levels (with Y-axis flip)
+            // Assign pixels to height levels
+            // NOTE: Do NOT flip Y-axis - HeightTexture reads texture directly with raw coordinates
             for (int i = 0; i < totalPixels; i++)
             {
                 int x = i % width;
                 int y = i / width;
-                int flippedY = height - 1 - y;
                 float grayscale = grayscaleValues[i];
                 
                 for (int lvl = 0; lvl < numLevels; lvl++)
@@ -825,7 +824,7 @@ namespace ImageToMap
                     HeightLevel level = levels[lvl];
                     if (grayscale >= level.minHeight && grayscale < level.maxHeight)
                     {
-                        level.positions.Add(new Vector2(x, flippedY));
+                        level.positions.Add(new Vector2(x, y));  // Use raw y, no flip
                         levels[lvl] = level;
                         break;
                     }
@@ -992,6 +991,214 @@ namespace ImageToMap
             }
 
             return histogram;
+        }
+
+        #endregion
+
+        #region Image Preprocessing
+
+        /// <summary>
+        /// Applies a Gaussian blur to reduce noise in the image before height analysis.
+        /// This helps create smoother height transitions and reduces random-looking terrain.
+        /// </summary>
+        /// <param name="source">Source texture to blur</param>
+        /// <param name="radius">Blur radius (1-5 recommended, higher = more blur)</param>
+        /// <returns>Blurred texture (caller is responsible for destroying when done)</returns>
+        public Texture2D ApplyGaussianBlur(Texture2D source, int radius = 2)
+        {
+            if (source == null) return null;
+            if (radius < 1) radius = 1;
+            if (radius > 10) radius = 10;
+
+            int width = source.width;
+            int height = source.height;
+            
+            Color[] sourcePixels = source.GetPixels();
+            Color[] blurredPixels = new Color[sourcePixels.Length];
+            
+            // Generate Gaussian kernel
+            float[] kernel = GenerateGaussianKernel(radius);
+            int kernelSize = radius * 2 + 1;
+            
+            // Horizontal pass
+            Color[] tempPixels = new Color[sourcePixels.Length];
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    float r = 0, g = 0, b = 0, a = 0;
+                    float weightSum = 0;
+                    
+                    for (int k = -radius; k <= radius; k++)
+                    {
+                        int sampleX = Mathf.Clamp(x + k, 0, width - 1);
+                        Color sample = sourcePixels[y * width + sampleX];
+                        float weight = kernel[k + radius];
+                        
+                        r += sample.r * weight;
+                        g += sample.g * weight;
+                        b += sample.b * weight;
+                        a += sample.a * weight;
+                        weightSum += weight;
+                    }
+                    
+                    tempPixels[y * width + x] = new Color(r / weightSum, g / weightSum, b / weightSum, a / weightSum);
+                }
+            }
+            
+            // Vertical pass
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    float r = 0, g = 0, b = 0, a = 0;
+                    float weightSum = 0;
+                    
+                    for (int k = -radius; k <= radius; k++)
+                    {
+                        int sampleY = Mathf.Clamp(y + k, 0, height - 1);
+                        Color sample = tempPixels[sampleY * width + x];
+                        float weight = kernel[k + radius];
+                        
+                        r += sample.r * weight;
+                        g += sample.g * weight;
+                        b += sample.b * weight;
+                        a += sample.a * weight;
+                        weightSum += weight;
+                    }
+                    
+                    blurredPixels[y * width + x] = new Color(r / weightSum, g / weightSum, b / weightSum, a / weightSum);
+                }
+            }
+            
+            Texture2D result = new Texture2D(width, height, TextureFormat.RGBA32, false);
+            result.SetPixels(blurredPixels);
+            result.Apply();
+            
+            LogDebug($"[ImageAnalyzer] Applied Gaussian blur with radius {radius}");
+            
+            return result;
+        }
+        
+        /// <summary>
+        /// Generates a 1D Gaussian kernel for blur operations.
+        /// </summary>
+        private float[] GenerateGaussianKernel(int radius)
+        {
+            int size = radius * 2 + 1;
+            float[] kernel = new float[size];
+            float sigma = radius / 2f;
+            if (sigma < 0.1f) sigma = 0.1f;
+            
+            float sum = 0;
+            for (int i = 0; i < size; i++)
+            {
+                int x = i - radius;
+                kernel[i] = Mathf.Exp(-(x * x) / (2 * sigma * sigma));
+                sum += kernel[i];
+            }
+            
+            // Normalize
+            for (int i = 0; i < size; i++)
+            {
+                kernel[i] /= sum;
+            }
+            
+            return kernel;
+        }
+        
+        /// <summary>
+        /// Normalizes contrast of the image to use the full 0-1 grayscale range.
+        /// This ensures maximum height differentiation in the output.
+        /// </summary>
+        /// <param name="source">Source texture</param>
+        /// <returns>Contrast-normalized texture (caller is responsible for destroying when done)</returns>
+        public Texture2D NormalizeContrast(Texture2D source)
+        {
+            if (source == null) return null;
+            
+            int width = source.width;
+            int height = source.height;
+            
+            Color32[] pixels = source.GetPixels32();
+            
+            // Find min and max grayscale values
+            float minGray = 1f;
+            float maxGray = 0f;
+            
+            foreach (Color32 pixel in pixels)
+            {
+                float gray = (pixel.r * 0.299f + pixel.g * 0.587f + pixel.b * 0.114f) / 255f;
+                if (gray < minGray) minGray = gray;
+                if (gray > maxGray) maxGray = gray;
+            }
+            
+            float range = maxGray - minGray;
+            if (range < 0.01f)
+            {
+                LogDebug("[ImageAnalyzer] Image has very low contrast, skipping normalization");
+                return source;
+            }
+            
+            // Normalize pixels
+            Color[] normalizedPixels = new Color[pixels.Length];
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                Color32 pixel = pixels[i];
+                float gray = (pixel.r * 0.299f + pixel.g * 0.587f + pixel.b * 0.114f) / 255f;
+                float normalizedGray = (gray - minGray) / range;
+                normalizedPixels[i] = new Color(normalizedGray, normalizedGray, normalizedGray, 1f);
+            }
+            
+            Texture2D result = new Texture2D(width, height, TextureFormat.RGBA32, false);
+            result.SetPixels(normalizedPixels);
+            result.Apply();
+            
+            LogDebug($"[ImageAnalyzer] Normalized contrast: original range [{minGray:F2}, {maxGray:F2}] → [0, 1]");
+            
+            return result;
+        }
+        
+        /// <summary>
+        /// Preprocesses an image for optimal heightmap generation.
+        /// Applies Gaussian blur and contrast normalization.
+        /// </summary>
+        /// <param name="source">Source texture</param>
+        /// <param name="blurRadius">Blur radius (0 = no blur, 1-5 recommended)</param>
+        /// <param name="normalizeContrast">Whether to normalize contrast</param>
+        /// <returns>Preprocessed texture (caller is responsible for destroying when done)</returns>
+        public Texture2D PreprocessForHeightMap(Texture2D source, int blurRadius = 2, bool normalizeContrast = true)
+        {
+            if (source == null) return null;
+            
+            Texture2D result = source;
+            Texture2D temp = null;
+            
+            // Apply blur if requested
+            if (blurRadius > 0)
+            {
+                temp = ApplyGaussianBlur(result, blurRadius);
+                if (result != source && result != null)
+                {
+                    Object.DestroyImmediate(result);
+                }
+                result = temp;
+            }
+            
+            // Normalize contrast if requested
+            if (normalizeContrast && result != null)
+            {
+                temp = NormalizeContrast(result);
+                if (result != source && result != null)
+                {
+                    Object.DestroyImmediate(result);
+                }
+                result = temp;
+            }
+            
+            LogDebug($"[ImageAnalyzer] Preprocessing complete (blur={blurRadius}, normalizeContrast={normalizeContrast})");
+            
+            return result;
         }
 
         #endregion

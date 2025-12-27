@@ -218,9 +218,12 @@ namespace ImageToMap
                         // Try to find matching TilePreset from palette
                         TilePreset tilePreset = null;
                         
-                        // FIXED: Always calculate Y offset based on level index for distinct heights
-                        // Each level gets progressively higher (0.5 units per level)
-                        float yOffset = i * 0.5f;
+                        // FIXED: Calculate Y offset based on actual grayscale midpoint of the height range
+                        // This ensures tiles at brighter areas are visually higher than darker areas
+                        // Using a max world height of 4.0 units for good visual separation
+                        const float MAX_WORLD_HEIGHT = 4.0f;
+                        float grayscaleMidpoint = (level.minHeight + level.maxHeight) / 2f;
+                        float yOffset = grayscaleMidpoint * MAX_WORLD_HEIGHT;
                         
                         if (palette != null && palette.mappings != null)
                         {
