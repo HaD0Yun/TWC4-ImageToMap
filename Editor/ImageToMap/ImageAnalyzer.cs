@@ -190,14 +190,16 @@ namespace ImageToMap
             }
 
             // Assign pixels to clusters and calculate coverage
+            // FIX: Flip Y-axis to match Unity's bottom-left origin coordinate system
             for (int i = 0; i < totalPixels; i++)
             {
                 int x = i % width;
                 int y = i / width;
+                int flippedY = height - 1 - y;  // Flip Y for Unity coordinate system
                 int clusterIdx = assignments[i];
                 
                 ColorCluster cluster = clusters[clusterIdx];
-                cluster.pixels.Add(new Vector2Int(x, y));
+                cluster.pixels.Add(new Vector2Int(x, flippedY));
                 clusters[clusterIdx] = cluster;
             }
 
@@ -410,11 +412,13 @@ namespace ImageToMap
             }
 
             // Assign pixels to height levels based on grayscale value
+            // FIX: Flip Y-axis to match Unity's bottom-left origin coordinate system
             for (int x = 0; x < width; x++)
             {
                 for (int y = 0; y < height; y++)
                 {
                     int idx = y * width + x;
+                    int flippedY = height - 1 - y;  // Flip Y for Unity coordinate system
                     // Calculate grayscale from Color32 (faster than Color.grayscale)
                     Color32 c = pixels32[idx];
                     float grayscale = (c.r * 0.299f + c.g * 0.587f + c.b * 0.114f) / 255f;
@@ -425,7 +429,7 @@ namespace ImageToMap
                         HeightLevel level = levels[i];
                         if (grayscale >= level.minHeight && grayscale < level.maxHeight)
                         {
-                            level.positions.Add(new Vector2(x, y));
+                            level.positions.Add(new Vector2(x, flippedY));
                             levels[i] = level;
                             break;
                         }
@@ -736,6 +740,110 @@ namespace ImageToMap
 
         #endregion
 
+        #region Adaptive Height Level Extraction
+
+        /// <summary>
+        /// Extracts height levels using adaptive thresholds based on image histogram.
+        /// This provides better results than fixed thresholds for images with non-uniform brightness distribution.
+        /// </summary>
+        /// <param name="texture">Source texture to analyze</param>
+        /// <param name="numLevels">Number of height levels to extract</param>
+        /// <returns>List of height levels with adaptive boundaries</returns>
+        public List<HeightLevel> ExtractHeightLevelsAdaptive(Texture2D texture, int numLevels)
+        {
+            if (texture == null)
+            {
+                LogError("[ImageAnalyzer] ExtractHeightLevelsAdaptive: Texture is null");
+                return new List<HeightLevel>();
+            }
+
+            if (numLevels <= 0)
+            {
+                LogError("[ImageAnalyzer] ExtractHeightLevelsAdaptive: numLevels must be positive");
+                return new List<HeightLevel>();
+            }
+
+            int width = texture.width;
+            int height = texture.height;
+            
+            Color32[] pixels32 = texture.GetPixels32();
+            int totalPixels = pixels32.Length;
+            
+            // Calculate histogram (256 bins)
+            int[] histogram = new int[256];
+            float[] grayscaleValues = new float[totalPixels];
+            
+            for (int i = 0; i < totalPixels; i++)
+            {
+                Color32 c = pixels32[i];
+                float gray = (c.r * 0.299f + c.g * 0.587f + c.b * 0.114f) / 255f;
+                grayscaleValues[i] = gray;
+                int bin = Mathf.Clamp((int)(gray * 255f), 0, 255);
+                histogram[bin]++;
+            }
+            
+            // Find adaptive thresholds using percentile-based approach
+            float[] thresholds = new float[numLevels + 1];
+            thresholds[0] = 0f;
+            thresholds[numLevels] = 1.001f; // Slightly over 1 to include 1.0
+            
+            int pixelsPerLevel = totalPixels / numLevels;
+            int cumulative = 0;
+            int thresholdIdx = 1;
+            
+            for (int bin = 0; bin < 256 && thresholdIdx < numLevels; bin++)
+            {
+                cumulative += histogram[bin];
+                if (cumulative >= pixelsPerLevel * thresholdIdx)
+                {
+                    thresholds[thresholdIdx] = (bin + 1) / 255f;
+                    thresholdIdx++;
+                }
+            }
+            
+            // Create height levels with adaptive thresholds
+            List<HeightLevel> levels = new List<HeightLevel>();
+            string[] defaultLevelNames = GenerateHeightLevelNames(numLevels);
+            
+            for (int i = 0; i < numLevels; i++)
+            {
+                HeightLevel level = new HeightLevel(thresholds[i], thresholds[i + 1], defaultLevelNames[i]);
+                levels.Add(level);
+            }
+            
+            // Assign pixels to height levels (with Y-axis flip)
+            for (int i = 0; i < totalPixels; i++)
+            {
+                int x = i % width;
+                int y = i / width;
+                int flippedY = height - 1 - y;
+                float grayscale = grayscaleValues[i];
+                
+                for (int lvl = 0; lvl < numLevels; lvl++)
+                {
+                    HeightLevel level = levels[lvl];
+                    if (grayscale >= level.minHeight && grayscale < level.maxHeight)
+                    {
+                        level.positions.Add(new Vector2(x, flippedY));
+                        levels[lvl] = level;
+                        break;
+                    }
+                }
+            }
+            
+            // Log results
+            for (int i = 0; i < numLevels; i++)
+            {
+                HeightLevel level = levels[i];
+                float coverage = (float)level.positions.Count / totalPixels * 100f;
+                LogDebug($"[ImageAnalyzer] Adaptive height level '{level.name}' ({level.minHeight:F2}-{level.maxHeight:F2}): {level.positions.Count} pixels ({coverage:F1}%)");
+            }
+            
+            return levels;
+        }
+
+        #endregion
+
         #region Complete Analysis
 
         /// <summary>
@@ -745,8 +853,9 @@ namespace ImageToMap
         /// <param name="numColorClusters">Number of color clusters for K-Means</param>
         /// <param name="numHeightLevels">Number of height levels to extract</param>
         /// <param name="edgeThreshold">Threshold for edge detection</param>
+        /// <param name="useAdaptiveHeights">Use adaptive height thresholds based on histogram</param>
         /// <returns>Complete analysis result</returns>
-        public AnalysisResult AnalyzeImage(Texture2D texture, int numColorClusters = 5, int numHeightLevels = 4, float edgeThreshold = 0.1f)
+        public AnalysisResult AnalyzeImage(Texture2D texture, int numColorClusters = 5, int numHeightLevels = 4, float edgeThreshold = 0.1f, bool useAdaptiveHeights = true)
         {
             AnalysisResult result = new AnalysisResult();
             
@@ -765,8 +874,16 @@ namespace ImageToMap
             // Perform color clustering
             result.colorClusters = AnalyzeColors(texture, numColorClusters);
 
-            // Extract height levels
-            result.heightLevels = ExtractHeightLevels(texture, numHeightLevels);
+            // Extract height levels (use adaptive method by default for better results)
+            if (useAdaptiveHeights)
+            {
+                result.heightLevels = ExtractHeightLevelsAdaptive(texture, numHeightLevels);
+                LogDebug("[ImageAnalyzer] Using adaptive height level extraction");
+            }
+            else
+            {
+                result.heightLevels = ExtractHeightLevels(texture, numHeightLevels);
+            }
 
             // Detect edges
             result.edgeMap = DetectEdges(texture, edgeThreshold);

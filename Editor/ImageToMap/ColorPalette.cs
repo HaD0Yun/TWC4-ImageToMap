@@ -43,9 +43,9 @@ namespace ImageToMap
             [Tooltip("The target color to match in the source image")]
             public Color targetColor = Color.white;
             
-            [Tooltip("How much color variance is allowed (0 = exact match, 1 = any color)")]
+            [Tooltip("How much color variance is allowed (0 = exact match, 1 = any color). Recommended: 0.3-0.5")]
             [Range(0f, 1f)]
-            public float colorTolerance = 0.2f;
+            public float colorTolerance = 0.4f;  // Increased default for better matching
             
             [Tooltip("The TWC4 TilePreset to use for this color")]
             public TilePreset tilePreset;
@@ -149,19 +149,73 @@ namespace ImageToMap
         }
         
         /// <summary>
-        /// Calculates the Euclidean distance between two colors in RGB space.
-        /// Alpha channel is ignored for matching purposes.
+        /// Calculates the perceptual distance between two colors using LAB color space.
+        /// This provides better results than RGB distance as it matches human color perception.
         /// </summary>
         /// <param name="a">First color</param>
         /// <param name="b">Second color</param>
-        /// <returns>Distance value between 0 (identical) and ~1.73 (maximum difference)</returns>
+        /// <returns>Perceptual distance value (normalized 0-1 range)</returns>
         public static float ColorDistance(Color a, Color b)
         {
-            // Calculate Euclidean distance in RGB space (ignoring alpha)
+            // Convert RGB to LAB for perceptual color distance
+            Vector3 labA = RGBToLAB(a);
+            Vector3 labB = RGBToLAB(b);
+            
+            // Calculate Delta E (CIE76) - Euclidean distance in LAB space
+            float dL = labA.x - labB.x;
+            float dA = labA.y - labB.y;
+            float dB = labA.z - labB.z;
+            
+            float deltaE = Mathf.Sqrt(dL * dL + dA * dA + dB * dB);
+            
+            // Normalize to 0-1 range (max deltaE in practice is around 100-150)
+            return Mathf.Clamp01(deltaE / 100f);
+        }
+        
+        /// <summary>
+        /// Converts RGB color to LAB color space for perceptual distance calculation.
+        /// </summary>
+        private static Vector3 RGBToLAB(Color rgb)
+        {
+            // RGB to XYZ (assuming sRGB with D65 illuminant)
+            float r = PivotRGB(rgb.r);
+            float g = PivotRGB(rgb.g);
+            float b = PivotRGB(rgb.b);
+            
+            float x = r * 0.4124564f + g * 0.3575761f + b * 0.1804375f;
+            float y = r * 0.2126729f + g * 0.7151522f + b * 0.0721750f;
+            float z = r * 0.0193339f + g * 0.1191920f + b * 0.9503041f;
+            
+            // XYZ to LAB (D65 reference white)
+            x = PivotXYZ(x / 0.95047f);
+            y = PivotXYZ(y / 1.00000f);
+            z = PivotXYZ(z / 1.08883f);
+            
+            float L = 116f * y - 16f;
+            float A = 500f * (x - y);
+            float B = 200f * (y - z);
+            
+            return new Vector3(L, A, B);
+        }
+        
+        private static float PivotRGB(float n)
+        {
+            return (n > 0.04045f) ? Mathf.Pow((n + 0.055f) / 1.055f, 2.4f) : n / 12.92f;
+        }
+        
+        private static float PivotXYZ(float n)
+        {
+            return (n > 0.008856f) ? Mathf.Pow(n, 1f / 3f) : (7.787f * n) + (16f / 116f);
+        }
+        
+        /// <summary>
+        /// Calculates simple RGB Euclidean distance (legacy method for compatibility).
+        /// </summary>
+        public static float ColorDistanceRGB(Color a, Color b)
+        {
             float dr = a.r - b.r;
             float dg = a.g - b.g;
             float db = a.b - b.b;
-            
             return Mathf.Sqrt(dr * dr + dg * dg + db * db);
         }
         
@@ -174,9 +228,7 @@ namespace ImageToMap
         /// <returns>Normalized distance value between 0 (identical) and 1 (maximum difference)</returns>
         public static float ColorDistanceNormalized(Color a, Color b)
         {
-            // Maximum possible distance in RGB space is sqrt(3) ≈ 1.732
-            const float maxDistance = 1.732050808f;
-            return ColorDistance(a, b) / maxDistance;
+            return ColorDistance(a, b);  // Already normalized in LAB version
         }
         
         /// <summary>

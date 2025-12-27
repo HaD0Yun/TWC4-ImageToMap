@@ -1063,6 +1063,39 @@ namespace ImageToMap
 
             try
             {
+                // ===== FIX 1: Auto-adjust TWC4 Configuration size to match image =====
+                if (sourceImage != null)
+                {
+                    var twcConfig = targetManager.configuration;
+                    
+                    // Calculate appropriate map size (cap at 512 for performance)
+                    int targetWidth = Mathf.Min(sourceImage.width, 512);
+                    int targetHeight = Mathf.Min(sourceImage.height, 512);
+                    
+                    // Maintain aspect ratio if image is larger
+                    if (sourceImage.width > 512 || sourceImage.height > 512)
+                    {
+                        float aspect = (float)sourceImage.width / sourceImage.height;
+                        if (aspect > 1f)
+                        {
+                            targetWidth = 512;
+                            targetHeight = Mathf.RoundToInt(512 / aspect);
+                        }
+                        else
+                        {
+                            targetHeight = 512;
+                            targetWidth = Mathf.RoundToInt(512 * aspect);
+                        }
+                    }
+                    
+                    // Set configuration size
+                    twcConfig.worldWidth = targetWidth;
+                    twcConfig.worldHeight = targetHeight;
+                    
+                    EditorUtility.SetDirty(twcConfig);
+                    Debug.Log($"[ImageToMapEditorWindow] Set TWC4 Configuration size to {targetWidth}x{targetHeight} (image: {sourceImage.width}x{sourceImage.height})");
+                }
+                
                 // Ensure colorPalette is loaded
                 if (colorPalette == null)
                 {
