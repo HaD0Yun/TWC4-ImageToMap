@@ -1089,8 +1089,8 @@ namespace ImageToMap
                     }
                     
                     // Set configuration size
-                    twcConfig.worldWidth = targetWidth;
-                    twcConfig.worldHeight = targetHeight;
+                    twcConfig.width = targetWidth;
+                    twcConfig.height = targetHeight;
                     
                     EditorUtility.SetDirty(twcConfig);
                     Debug.Log($"[ImageToMapEditorWindow] Set TWC4 Configuration size to {targetWidth}x{targetHeight} (image: {sourceImage.width}x{sourceImage.height})");
