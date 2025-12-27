@@ -217,7 +217,10 @@ namespace ImageToMap
                         
                         // Try to find matching TilePreset from palette
                         TilePreset tilePreset = null;
-                        float yOffset = i * 0.5f; // Default Y offset based on level index
+                        
+                        // FIXED: Always calculate Y offset based on level index for distinct heights
+                        // Each level gets progressively higher (0.5 units per level)
+                        float yOffset = i * 0.5f;
                         
                         if (palette != null && palette.mappings != null)
                         {
@@ -230,14 +233,17 @@ namespace ImageToMap
                                 mapping = palette.mappings[i];
                             }
                             
-                            // Third try: Use first available mapping with a TilePreset
+                            // Third try: Use first available mapping with a TilePreset (cycle through)
                             if (mapping == null || mapping.tilePreset == null)
                             {
-                                foreach (var m in palette.mappings)
+                                // Cycle through palette mappings for levels beyond palette count
+                                int paletteIdx = i % palette.mappings.Count;
+                                for (int p = 0; p < palette.mappings.Count; p++)
                                 {
-                                    if (m.tilePreset != null)
+                                    int checkIdx = (paletteIdx + p) % palette.mappings.Count;
+                                    if (palette.mappings[checkIdx].tilePreset != null)
                                     {
-                                        mapping = m;
+                                        mapping = palette.mappings[checkIdx];
                                         break;
                                     }
                                 }
@@ -246,8 +252,8 @@ namespace ImageToMap
                             if (mapping != null && mapping.tilePreset != null)
                             {
                                 tilePreset = mapping.tilePreset;
-                                yOffset = mapping.yOffset;
-                                Debug.Log($"[ImageToMapGenerator] Level '{level.name}' → TilePreset '{tilePreset.name}'");
+                                // NOTE: Do NOT use mapping.yOffset - always use index-based yOffset for distinct heights
+                                Debug.Log($"[ImageToMapGenerator] Level {i} '{level.name}' → TilePreset '{tilePreset.name}' (Y: {yOffset})");
                             }
                         }
                         
