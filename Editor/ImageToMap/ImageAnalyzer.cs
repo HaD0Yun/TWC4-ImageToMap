@@ -450,6 +450,7 @@ namespace ImageToMap
 
         /// <summary>
         /// Generates descriptive names for height levels.
+        /// Supports up to 16 levels with terrain-appropriate names.
         /// </summary>
         private string[] GenerateHeightLevelNames(int numLevels)
         {
@@ -457,40 +458,40 @@ namespace ImageToMap
             
             string[] names = new string[numLevels];
             
-            // Predefined names for common level counts
-            if (numLevels == 1)
+            // Comprehensive terrain names for various level counts
+            string[] terrainNames = new string[]
             {
-                names[0] = "Ground";
-            }
-            else if (numLevels == 2)
+                "DeepWater",    // 0 - Darkest/lowest
+                "Water",        // 1
+                "Shallows",     // 2
+                "Beach",        // 3
+                "Lowland",      // 4
+                "Plains",       // 5
+                "Grassland",    // 6
+                "Forest",       // 7
+                "Hills",        // 8
+                "Highland",     // 9
+                "Mountain",     // 10
+                "HighMountain", // 11
+                "Alpine",       // 12
+                "Cliffs",       // 13
+                "SnowLine",     // 14
+                "Peaks"         // 15 - Brightest/highest
+            };
+            
+            if (numLevels <= terrainNames.Length)
             {
-                names[0] = "Low";
-                names[1] = "High";
-            }
-            else if (numLevels == 3)
-            {
-                names[0] = "Valley";
-                names[1] = "Plains";
-                names[2] = "Hills";
-            }
-            else if (numLevels == 4)
-            {
-                names[0] = "Deep";
-                names[1] = "Low";
-                names[2] = "Mid";
-                names[3] = "High";
-            }
-            else if (numLevels == 5)
-            {
-                names[0] = "Abyss";
-                names[1] = "Valley";
-                names[2] = "Plains";
-                names[3] = "Hills";
-                names[4] = "Peaks";
+                // Distribute terrain names evenly across the level count
+                for (int i = 0; i < numLevels; i++)
+                {
+                    // Map level index to terrain name index
+                    int terrainIdx = (i * terrainNames.Length) / numLevels;
+                    names[i] = terrainNames[terrainIdx];
+                }
             }
             else
             {
-                // Generic naming for more levels
+                // Fallback for more than 16 levels
                 for (int i = 0; i < numLevels; i++)
                 {
                     names[i] = $"Level_{i + 1}";

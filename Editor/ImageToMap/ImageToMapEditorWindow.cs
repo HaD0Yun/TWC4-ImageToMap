@@ -68,7 +68,7 @@ namespace ImageToMap
 
         // Quick Settings (overrides config when no config is assigned)
         private int quickColorClusters = 5;
-        private int quickHeightLevels = 4;
+        private int quickHeightLevels = 8; // Increased from 4 for better terrain detail
         private float quickEdgeThreshold = 0.3f;
         private bool quickUseEdgeDetection = false;
 
@@ -510,7 +510,7 @@ namespace ImageToMap
                 EditorGUI.BeginDisabledGroup(config != null);
 
                 int newColorClusters = EditorGUILayout.IntSlider("Color Clusters", quickColorClusters, 2, 10);
-                int newHeightLevels = EditorGUILayout.IntSlider("Height Levels", quickHeightLevels, 2, 8);
+                int newHeightLevels = EditorGUILayout.IntSlider("Height Levels", quickHeightLevels, 2, 16); // Increased max from 8 to 16
                 bool newUseEdgeDetection = EditorGUILayout.Toggle("Use Edge Detection", quickUseEdgeDetection);
                 
                 if (quickUseEdgeDetection || newUseEdgeDetection)
