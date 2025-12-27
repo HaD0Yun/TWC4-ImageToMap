@@ -92,6 +92,9 @@ namespace ImageToMap
         private GUIStyle foldoutStyle;
         private bool stylesInitialized;
 
+        // Map size constraints (shared between analysis and generation for consistency)
+        private const int MAX_MAP_SIZE = 32;  // Maximum map dimension for performance
+
         #endregion
 
         #region Unity Callbacks
@@ -1063,6 +1066,7 @@ namespace ImageToMap
             if (isAnalyzing) return;
 
             isAnalyzing = true;
+            Texture2D downsampledImage = null;  // Track for cleanup
 
             try
             {
@@ -1078,24 +1082,89 @@ namespace ImageToMap
                 int heightLevels = config != null ? config.heightLevelCount : quickHeightLevels;
                 float edgeThreshold = config != null ? config.edgeThreshold : quickEdgeThreshold;
 
-                // Apply preprocessing if enabled (reduces noise, improves height fidelity)
+                // ===== PRE-DOWNSAMPLE FIX =====
+                // CRITICAL: Downsample the image to MAX_MAP_SIZE BEFORE analysis.
+                // This ensures analysis computes height level ranges from the SAME pixel values
+                // that HeightTexture will sample during generation.
+                // Without this, analysis runs on 512x512 but generation uses 32x32,
+                // causing bilinear interpolation to change grayscale values and
+                // pixels to fall into wrong height level ranges.
+                EditorUtility.DisplayProgressBar("Analyzing Image", "Preparing image...", 0.05f);
+                
                 Texture2D imageToAnalyze = sourceImage;
-                if (usePreprocessing)
+                
+                // Check if downsampling is needed
+                if (sourceImage.width > MAX_MAP_SIZE || sourceImage.height > MAX_MAP_SIZE)
                 {
-                    EditorUtility.DisplayProgressBar("Analyzing Image", "Preprocessing image...", 0.1f);
-                    preprocessedImage = analyzer.PreprocessForHeightMap(sourceImage, blurRadius, normalizeContrast);
-                    if (preprocessedImage != null)
+                    // Calculate target size maintaining aspect ratio
+                    int targetWidth, targetHeight;
+                    float aspect = (float)sourceImage.width / sourceImage.height;
+                    
+                    if (aspect > 1f)
                     {
-                        imageToAnalyze = preprocessedImage;
-                        Debug.Log($"[ImageToMapEditorWindow] Applied preprocessing (blur={blurRadius}, normalizeContrast={normalizeContrast})");
+                        // Wider than tall
+                        targetWidth = MAX_MAP_SIZE;
+                        targetHeight = Mathf.Max(1, Mathf.RoundToInt(MAX_MAP_SIZE / aspect));
+                    }
+                    else
+                    {
+                        // Taller than wide or square
+                        targetHeight = MAX_MAP_SIZE;
+                        targetWidth = Mathf.Max(1, Mathf.RoundToInt(MAX_MAP_SIZE * aspect));
+                    }
+                    
+                    Debug.Log($"[ImageToMapEditorWindow] Pre-downsampling image from {sourceImage.width}x{sourceImage.height} to {targetWidth}x{targetHeight} for consistent analysis/generation");
+                    
+                    // Use the analyzer's ResizeTexture method for proper downsampling
+                    downsampledImage = analyzer.ResizeTexture(sourceImage, targetWidth, targetHeight);
+                    if (downsampledImage != null)
+                    {
+                        imageToAnalyze = downsampledImage;
+                    }
+                    else
+                    {
+                        Debug.LogWarning("[ImageToMapEditorWindow] Downsampling failed, using original image");
                     }
                 }
                 else
                 {
-                    preprocessedImage = null;  // No preprocessing
+                    Debug.Log($"[ImageToMapEditorWindow] Image {sourceImage.width}x{sourceImage.height} is within MAX_MAP_SIZE ({MAX_MAP_SIZE}), no downsampling needed");
                 }
 
-                // Perform analysis
+                // Apply preprocessing if enabled (reduces noise, improves height fidelity)
+                // IMPORTANT: Apply preprocessing AFTER downsampling so blur operates on final resolution
+                if (usePreprocessing)
+                {
+                    EditorUtility.DisplayProgressBar("Analyzing Image", "Preprocessing image...", 0.15f);
+                    Texture2D preprocessed = analyzer.PreprocessForHeightMap(imageToAnalyze, blurRadius, normalizeContrast);
+                    if (preprocessed != null && preprocessed != imageToAnalyze)
+                    {
+                        // Clean up the intermediate downsampled image if it was created and is different from preprocessed
+                        if (downsampledImage != null && downsampledImage != preprocessed && downsampledImage != sourceImage)
+                        {
+                            DestroyImmediate(downsampledImage);
+                        }
+                        preprocessedImage = preprocessed;
+                        imageToAnalyze = preprocessedImage;
+                        downsampledImage = null;  // preprocessedImage now owns the texture
+                        Debug.Log($"[ImageToMapEditorWindow] Applied preprocessing (blur={blurRadius}, normalizeContrast={normalizeContrast}) on {imageToAnalyze.width}x{imageToAnalyze.height} image");
+                    }
+                }
+                else
+                {
+                    // No preprocessing - if we downsampled, store it as preprocessedImage for proper lifecycle management
+                    if (downsampledImage != null)
+                    {
+                        preprocessedImage = downsampledImage;
+                        downsampledImage = null;  // preprocessedImage now owns the texture
+                    }
+                    else
+                    {
+                        preprocessedImage = null;
+                    }
+                }
+
+                // Perform analysis on the (downsampled and optionally preprocessed) image
                 // IMPORTANT: useAdaptiveHeights=false ensures height levels correspond to actual grayscale values
                 // This is critical for proper height representation - adaptive levels break the correlation
                 // between grayscale brightness and tile elevation
@@ -1109,17 +1178,24 @@ namespace ImageToMap
                     useAdaptiveHeights: false  // Use fixed height ranges for proper height correlation
                 );
                 
-                // Store the texture to use for generation (preprocessed if available)
+                // Store the texture to use for generation (downsampled/preprocessed if applicable)
+                // This ensures HeightTexture samples from the SAME pixel values that analysis computed ranges from
                 analysisResult.sourceTexture = imageToAnalyze;
 
                 EditorUtility.DisplayProgressBar("Analyzing Image", "Analysis complete!", 1f);
                 
-                Debug.Log($"[ImageToMapEditorWindow] Analysis complete. Found {analysisResult.colorClusters.Count} color clusters, {analysisResult.heightLevels.Count} height levels.");
+                Debug.Log($"[ImageToMapEditorWindow] Analysis complete on {imageToAnalyze.width}x{imageToAnalyze.height} image. Found {analysisResult.colorClusters.Count} color clusters, {analysisResult.heightLevels.Count} height levels.");
             }
             catch (System.Exception ex)
             {
                 Debug.LogError($"[ImageToMapEditorWindow] Analysis failed: {ex.Message}\n{ex.StackTrace}");
                 analysisResult = null;
+                
+                // Clean up on error
+                if (downsampledImage != null && downsampledImage != sourceImage)
+                {
+                    DestroyImmediate(downsampledImage);
+                }
             }
             finally
             {
@@ -1145,40 +1221,27 @@ namespace ImageToMap
 
             try
             {
-                // ===== FIX 1: Auto-adjust TWC4 Configuration size to match image =====
-                // NOTE: Large maps (512+) can cause very slow execution. Start with 128 for testing.
-                const int MAX_MAP_SIZE = 32; // Reduced from 128 for faster execution
+                // ===== Set TWC4 Configuration size to match analyzed (already downsampled) image =====
+                // The analysisResult.sourceTexture is already downsampled to MAX_MAP_SIZE during AnalyzeImage()
+                // This ensures TWC4 config matches the exact dimensions used for analysis
+                Texture2D textureForGeneration = analysisResult.sourceTexture ?? sourceImage;
                 
-                if (sourceImage != null)
+                var twcConfig = targetManager.configuration;
+                
+                // Use the analyzed texture dimensions directly - it's already capped at MAX_MAP_SIZE
+                int targetWidth = textureForGeneration.width;
+                int targetHeight = textureForGeneration.height;
+                
+                // Set configuration size to match the analyzed image exactly
+                twcConfig.width = targetWidth;
+                twcConfig.height = targetHeight;
+                
+                EditorUtility.SetDirty(twcConfig);
+                Debug.Log($"[ImageToMapEditorWindow] Set TWC4 Configuration size to {targetWidth}x{targetHeight} (original: {sourceImage.width}x{sourceImage.height}, MAX_MAP_SIZE={MAX_MAP_SIZE})");
+                
+                if (targetWidth != sourceImage.width || targetHeight != sourceImage.height)
                 {
-                    var twcConfig = targetManager.configuration;
-                    
-                    // Calculate appropriate map size (cap at MAX_MAP_SIZE for performance)
-                    int targetWidth = Mathf.Min(sourceImage.width, MAX_MAP_SIZE);
-                    int targetHeight = Mathf.Min(sourceImage.height, MAX_MAP_SIZE);
-                    
-                    // Maintain aspect ratio if image is larger
-                    if (sourceImage.width > MAX_MAP_SIZE || sourceImage.height > MAX_MAP_SIZE)
-                    {
-                        float aspect = (float)sourceImage.width / sourceImage.height;
-                        if (aspect > 1f)
-                        {
-                            targetWidth = MAX_MAP_SIZE;
-                            targetHeight = Mathf.RoundToInt(MAX_MAP_SIZE / aspect);
-                        }
-                        else
-                        {
-                            targetHeight = MAX_MAP_SIZE;
-                            targetWidth = Mathf.RoundToInt(MAX_MAP_SIZE * aspect);
-                        }
-                    }
-                    
-                    // Set configuration size
-                    twcConfig.width = targetWidth;
-                    twcConfig.height = targetHeight;
-                    
-                    EditorUtility.SetDirty(twcConfig);
-                    Debug.Log($"[ImageToMapEditorWindow] Set TWC4 Configuration size to {targetWidth}x{targetHeight} (image: {sourceImage.width}x{sourceImage.height})");
+                    Debug.Log($"[ImageToMapEditorWindow] NOTE: Analysis and generation using pre-downsampled image for consistent pixel values");
                 }
                 
                 // Ensure colorPalette is loaded
@@ -1202,9 +1265,8 @@ namespace ImageToMap
 
                 ImageToMapGenerator.GenerationResult result;
                 
-                // Use the texture that was analyzed (preprocessed if enabled)
+                // textureForGeneration is already set above from analysisResult.sourceTexture
                 // This ensures HeightTexture uses the same data as the analysis
-                Texture2D textureForGeneration = analysisResult.sourceTexture ?? sourceImage;
 
                 if (generationMode == GenerationMode.HeightBased)
                 {
