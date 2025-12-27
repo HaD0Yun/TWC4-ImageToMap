@@ -31,9 +31,9 @@ namespace ImageToMap
         [Range(2, 10)]
         public int colorClusterCount = 5;
         
-        [Tooltip("Number of distinct height levels for terrain classification. Affects layer generation.")]
-        [Range(2, 8)]
-        public int heightLevelCount = 4;
+        [Tooltip("Number of distinct height levels for terrain classification. More levels = finer terrain detail.")]
+        [Range(2, 16)]
+        public int heightLevelCount = 8;
         
         [Tooltip("Enable edge detection to identify terrain boundaries and transitions.")]
         public bool useEdgeDetection = false;
@@ -245,11 +245,11 @@ namespace ImageToMap
                 return false;
             }
             
-            // Validate height level count matches available terrain types
-            if (heightLevelCount > 4)
+            // Validate height level count (now supports up to 16 terrain types)
+            if (heightLevelCount > 16)
             {
-                // Warning: More height levels than defined terrain types
-                // This is allowed but may cause unexpected behavior
+                // Warning: More height levels than defined terrain names
+                // Generic names (Level_N) will be used for levels > 16
             }
             
             error = null;
