@@ -1064,27 +1064,30 @@ namespace ImageToMap
             try
             {
                 // ===== FIX 1: Auto-adjust TWC4 Configuration size to match image =====
+                // NOTE: Large maps (512+) can cause very slow execution. Start with 128 for testing.
+                const int MAX_MAP_SIZE = 128; // Reduced from 512 for faster execution
+                
                 if (sourceImage != null)
                 {
                     var twcConfig = targetManager.configuration;
                     
-                    // Calculate appropriate map size (cap at 512 for performance)
-                    int targetWidth = Mathf.Min(sourceImage.width, 512);
-                    int targetHeight = Mathf.Min(sourceImage.height, 512);
+                    // Calculate appropriate map size (cap at MAX_MAP_SIZE for performance)
+                    int targetWidth = Mathf.Min(sourceImage.width, MAX_MAP_SIZE);
+                    int targetHeight = Mathf.Min(sourceImage.height, MAX_MAP_SIZE);
                     
                     // Maintain aspect ratio if image is larger
-                    if (sourceImage.width > 512 || sourceImage.height > 512)
+                    if (sourceImage.width > MAX_MAP_SIZE || sourceImage.height > MAX_MAP_SIZE)
                     {
                         float aspect = (float)sourceImage.width / sourceImage.height;
                         if (aspect > 1f)
                         {
-                            targetWidth = 512;
-                            targetHeight = Mathf.RoundToInt(512 / aspect);
+                            targetWidth = MAX_MAP_SIZE;
+                            targetHeight = Mathf.RoundToInt(MAX_MAP_SIZE / aspect);
                         }
                         else
                         {
-                            targetHeight = 512;
-                            targetWidth = Mathf.RoundToInt(512 * aspect);
+                            targetHeight = MAX_MAP_SIZE;
+                            targetWidth = Mathf.RoundToInt(MAX_MAP_SIZE * aspect);
                         }
                     }
                     
