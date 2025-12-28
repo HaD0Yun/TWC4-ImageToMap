@@ -82,9 +82,14 @@ namespace ImageToMap
         private enum GenerationMode
         {
             HeightBased,
-            ColorBased
+            ColorBased,
+            Voxel3D  // 3D heightmap with vertical tile stacking
         }
         private GenerationMode generationMode = GenerationMode.HeightBased;
+
+        // Voxel3D mode settings
+        private HeightTileMappings heightTileMappings;
+        private int voxelMaxHeight = 16;
 
         // Styles (cached for performance)
         private GUIStyle headerStyle;
@@ -918,12 +923,54 @@ namespace ImageToMap
             EditorGUILayout.LabelField("Generation Mode", EditorStyles.boldLabel);
             generationMode = (GenerationMode)EditorGUILayout.EnumPopup("Mode", generationMode);
 
-            EditorGUILayout.HelpBox(
-                generationMode == GenerationMode.HeightBased
-                    ? "Height-Based: Creates layers based on grayscale height values. Best for heightmaps and grayscale images."
-                    : "Color-Based: Creates layers based on color clusters. Best for colored reference images. Requires a Color Palette.",
-                MessageType.Info
-            );
+            string modeDescription;
+            switch (generationMode)
+            {
+                case GenerationMode.HeightBased:
+                    modeDescription = "Height-Based: Creates layers based on grayscale height values. Best for heightmaps and grayscale images.";
+                    break;
+                case GenerationMode.ColorBased:
+                    modeDescription = "Color-Based: Creates layers based on color clusters. Best for colored reference images. Requires a Color Palette.";
+                    break;
+                case GenerationMode.Voxel3D:
+                    modeDescription = "Voxel 3D: Creates true 3D terrain by stacking tiles vertically. Brighter pixels = taller columns.";
+                    break;
+                default:
+                    modeDescription = "";
+                    break;
+            }
+            EditorGUILayout.HelpBox(modeDescription, MessageType.Info);
+
+            // Voxel3D mode settings
+            if (generationMode == GenerationMode.Voxel3D)
+            {
+                EditorGUILayout.Space(5);
+                EditorGUILayout.LabelField("Voxel 3D Settings", EditorStyles.boldLabel);
+                
+                voxelMaxHeight = EditorGUILayout.IntSlider("Max Height (tiles)", voxelMaxHeight, 4, 32);
+                
+                heightTileMappings = (HeightTileMappings)EditorGUILayout.ObjectField(
+                    "Height Mappings",
+                    heightTileMappings,
+                    typeof(HeightTileMappings),
+                    false
+                );
+                
+                EditorGUILayout.HelpBox(
+                    "Voxel 3D mode stacks tiles vertically from Y=0 to Y=grayscaleValue*maxHeight.\n" +
+                    "Brighter pixels = taller columns.\n" +
+                    "Create HeightTileMappings: Assets > Create > ImageToMap > Height Tile Mappings",
+                    MessageType.Info
+                );
+                
+                if (heightTileMappings == null)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Please assign a HeightTileMappings asset to use Voxel 3D mode.",
+                        MessageType.Warning
+                    );
+                }
+            }
 
             // Color-based mode requires palette
             if (generationMode == GenerationMode.ColorBased && colorPalette == null)
@@ -1001,6 +1048,11 @@ namespace ImageToMap
             {
                 canGenerate = false;
                 validationMessage = "Color-Based mode requires a Color Palette.";
+            }
+            else if (generationMode == GenerationMode.Voxel3D && heightTileMappings == null)
+            {
+                canGenerate = false;
+                validationMessage = "Voxel 3D mode requires a HeightTileMappings asset.";
             }
             else if (isGenerating)
             {
@@ -1281,6 +1333,39 @@ namespace ImageToMap
                         colorPalette
                     );
                 }
+                else if (generationMode == GenerationMode.Voxel3D)
+                {
+                    if (heightTileMappings == null)
+                    {
+                        EditorUtility.DisplayDialog("Error", "Please assign a HeightTileMappings asset.", "OK");
+                        return;
+                    }
+                    
+                    generationStatus = "Generating 3D heightmap...";
+                    generationProgress = 0.3f;
+                    Repaint();
+                    
+                    var voxelGenerator = new Heightmap3DGenerator();
+                    voxelGenerator.Generate3DHeightmap(
+                        targetManager,
+                        textureForGeneration,
+                        voxelMaxHeight,
+                        heightTileMappings.mappings,
+                        (progress, message) => {
+                            generationProgress = 0.3f + progress * 0.6f;
+                            generationStatus = message;
+                            Repaint();
+                        }
+                    );
+                    
+                    // Create a success result for Voxel3D mode
+                    result = new ImageToMapGenerator.GenerationResult
+                    {
+                        success = true,
+                        message = $"Generated 3D heightmap with {voxelMaxHeight} vertical layers.",
+                        totalLayersCreated = voxelMaxHeight * 2 // Blueprint + Build layers
+                    };
+                }
                 else
                 {
                     generationStatus = "Generating from color clusters...";
@@ -1299,8 +1384,8 @@ namespace ImageToMap
                 generationStatus = "Executing layers...";
                 Repaint();
 
-                // Execute the generated layers
-                if (result.success && result.totalLayersCreated > 0)
+                // Execute the generated layers (skip for Voxel3D as it handles execution internally)
+                if (result.success && result.totalLayersCreated > 0 && generationMode != GenerationMode.Voxel3D)
                 {
                     generator.ExecuteLayers(targetManager);
                 }
